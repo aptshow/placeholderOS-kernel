@@ -1,2 +1,3 @@
 # placeholderOS-kernel
-very cool pleisjoder oues
+
+- the one and only placeholderOS repo -
