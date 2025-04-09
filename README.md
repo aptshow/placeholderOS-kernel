@@ -14,7 +14,7 @@ placeholderOS-kernel is being developed by **APT SHOW INCORPORATED** as an exper
 
 - **Multi-user Authentication**: Secure user accounts with permission levels
 - **Permission Groups**: Tiered access system (guest, user, admin, trusted, system)
-- **Command Shell Interface**: Builded in streamlined command processing
+- **Command Shell Interface**: Built in streamlined command processing
 - **Modular Architecture**: Designed for easy extension
 
 ## Current State
