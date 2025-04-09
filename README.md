@@ -1,3 +1,3 @@
 # placeholderOS-kernel
 
-- the one and only placeholderOS repo -
+- the one and only placeholderOS repo
