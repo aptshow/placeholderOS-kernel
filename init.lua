@@ -29,7 +29,8 @@
 ]]
 
 _G.metadata = {
-    name = "placeholderKernel",
+    name = "placeholderOS",
+    kernel = "placeholderKernel",
     version = "1.0.0",
     author = "APT SHOW INCORPORATED",
     license = "APGL"
