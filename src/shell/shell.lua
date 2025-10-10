@@ -7,6 +7,21 @@ if success then perms = result else print("Warning: Could not load permissions m
 success, result = pcall(function() return require("src.process") end)
 if success then process = result else print("Warning: Could not load process module") end
 
+-- Define permissions utils inline to avoid require issues
+local perms_utils = {
+    canKillProcess = function(shell, proc)
+        if not shell.currentUser then
+            return false
+        end
+        
+        if shell.currentUser.group == "admin" or shell.currentUser.group == "trusteddaniel" then
+            return true
+        end
+        
+        return proc.user == shell.currentUser.name
+    end
+}
+
 shell.currentUser = nil
 
 local function checkPermission(permission)
@@ -47,14 +62,13 @@ local function checkGroup(group)
     if shell.currentUser.group == "admin" then
         return true
     end
-
     return shell.currentUser.group == group
 end
 
 local function loadCommands()
     local binPath
     
-    local currentFile = debug.getinfo(1).source:sub(2)  -- Remove the leading '@'
+    local currentFile = debug.getinfo(1).source:sub(2)
     local currentDir = fs.getDir(currentFile)
     binPath = fs.combine(currentDir, "bin")
 
@@ -74,7 +88,6 @@ local function loadCommands()
                 if success and type(command) == "table" then
                     commands[commandName] = command
                     
-                    -- Register command permissions if available
                     if perms and command.required_permission then
                         local baseGroup = command.required_group or "guest"
                         
@@ -83,7 +96,6 @@ local function loadCommands()
                             baseGroup = "admin"
                         end
                         
-                        -- Assign permission to the base group
                         if perms.assignGroupPermission then
                             perms.assignGroupPermission(baseGroup, command.required_permission)
                         end
@@ -102,7 +114,6 @@ local function loadCommands()
     print("Successfully loaded " .. loadedCount .. " commands")
 end
 
--- Create shell environment to be passed to commands
 local function createShellEnv()
     local shellEnv = {}
     
@@ -110,19 +121,23 @@ local function createShellEnv()
         _G._LOGOUT_REQUESTED = true
     end
     
-    -- Add current user info
     shellEnv.currentUser = shell.currentUser
     shellEnv.username = shell.currentUser and shell.currentUser.name or "unknown"
     
     return shellEnv
 end
 
--- Execute a command
 local function executeCommand(shellEnv, input)
-    -- Split input into command and arguments
     local parts = {}
     for word in input:gmatch("%S+") do
         table.insert(parts, word)
+    end
+    
+    -- Check for background execution (&)
+    local background = false
+    if #parts > 0 and parts[#parts] == "&" then
+        background = true
+        table.remove(parts, #parts)  -- Remove the &
     end
     
     local commandName = table.remove(parts, 1)
@@ -130,16 +145,13 @@ local function executeCommand(shellEnv, input)
     
     local command = commands[commandName]
     if command then
-        -- Check if the user has permission to execute this command
         local requiredPerm = command.required_permission
         local hasPermission = true
         
         if requiredPerm then
-            -- Special case: admin users always have permission
             if shell.currentUser and shell.currentUser.group == "admin" then
                 hasPermission = true
             else
-                -- Check permission
                 hasPermission = checkPermission(requiredPerm)
             end
         end
@@ -149,33 +161,54 @@ local function executeCommand(shellEnv, input)
             return false
         end
         
-        -- Check group requirements if any
         if command.required_group and not checkGroup(command.required_group) then
             print("Permission denied: " .. command.required_group .. " group required")
             return false
         end
         
-        -- Set up kernel object for commands that need it
         _G.kernel = {
             version = "1.0.0",
             name = "placeholderOS",
             user = shell.currentUser,
             permissions = perms,
-            process = process
+            permissions_utils = perms_utils,
+            process = process,
+            scheduler = require("src.scheduler"),
+            commands = commands
         }
         
-        -- Execute the command
         if type(command.execute) == "function" then
-            -- Make sure we're passing the shell environment as the first parameter
-            local success, err = pcall(function()
-                return command.execute(shellEnv, table.unpack(parts))
-            end)
-            
-            if not success then
-                print("Error executing command: " .. tostring(err))
-                return false
+            if background then
+                local commandFunc = function()
+                    local success, err = pcall(function()
+                        return command.execute(shellEnv, table.unpack(parts))
+                    end)
+                    if not success then
+                        print("Background command '" .. commandName .. "' failed: " .. tostring(err))
+                    end
+                end
+                
+                local scheduler = _G.kernel.scheduler
+                local pid = scheduler.spawn(commandFunc, commandName, shell.currentUser.name, shell.currentUser.permissions)
+                
+                if pid then
+                    print("[" .. pid .. "] " .. commandName)
+                    return true
+                else
+                    print("Failed to start background process")
+                    return false
+                end
+            else
+                local success, err = pcall(function()
+                    return command.execute(shellEnv, table.unpack(parts))
+                end)
+                
+                if not success then
+                    print("Error executing command: " .. tostring(err))
+                    return false
+                end
+                return true
             end
-            return true
         else
             print("Command is not executable")
             return false
@@ -183,7 +216,6 @@ local function executeCommand(shellEnv, input)
     else
         print("Unknown command: " .. commandName)
         
-        -- Show available commands
         print("Available commands:")
         local sortedCommands = {}
         for cmd in pairs(commands) do
@@ -198,45 +230,6 @@ local function executeCommand(shellEnv, input)
     end
 end
 
--- Main shell loop
-local function run()
-    local running = true
-    
-    loadCommands()
-    
-    -- Reset global logout flag if it exists
-    _G._LOGOUT_REQUESTED = false
-    
-    if _G.currentUser then
-        shell.currentUser = _G.currentUser
-    else
-        print("Warning: No user logged in?")
-    end
-    
-    -- Create shell environment once
-    local shellEnv = createShellEnv()
-    
-    while running do
-        -- Read user input
-        local username = shell.currentUser and shell.currentUser.name or "guest"
-        write(username .. "@PlaceholderOS> ")
-        local input = io.read()
-        
-        if input and #input > 0 then
-            executeCommand(shellEnv, input)
-        end
-        
-        -- Check if logout was requested
-        if _G._LOGOUT_REQUESTED == true then
-            running = false
-        end
-    end
-    
-    print("Shell terminated")
-    return true
-end
-
--- Initialization function
 function shell.init(user)
     if user then
         shell.currentUser = user
@@ -256,7 +249,6 @@ function shell.start(username)
         end
     end
 
-    -- Check if the user logged in with password "noshell"
     if _G.currentUser and _G.currentUser.password == "noshell" then
         print("This account has no shell access.")
         print("Press any key to log out...")
@@ -264,8 +256,74 @@ function shell.start(username)
         return
     end
     
-    -- Run the shell
-    run()
+    loadCommands()
+    
+    _G._LOGOUT_REQUESTED = false
+    
+    if _G.currentUser then
+        shell.currentUser = _G.currentUser
+    else
+        print("Warning: No user logged in?")
+    end
+    
+    -- Display initial prompt
+    local username_prompt = shell.currentUser and shell.currentUser.name or "guest"
+    write(username_prompt .. "@PlaceholderOS> ")
+end
+
+local input_buffer = ""
+local input_complete = false
+
+function shell.handle_key_event(key)
+    if key == keys.enter then
+        input_complete = true
+        print()
+        return true
+    elseif key == keys.backspace then
+        if #input_buffer > 0 then
+            input_buffer = string.sub(input_buffer, 1, -2)
+            write("\b \b")
+        end
+    end
+    return false
+end
+
+function shell.handle_char_event(char)
+    input_buffer = input_buffer .. char
+    write(char)
+    return false
+end
+
+function shell.process_input()
+    if input_complete and #input_buffer > 0 then
+        local result = executeCommand(createShellEnv(), input_buffer)
+        input_buffer = ""
+        input_complete = false
+        
+        local username = shell.currentUser and shell.currentUser.name or "guest"
+        write(username .. "@PlaceholderOS> ")
+        
+        return result
+    elseif input_complete then
+        input_buffer = ""
+        input_complete = false
+        local username = shell.currentUser and shell.currentUser.name or "guest"
+        write(username .. "@PlaceholderOS> ")
+    end
+    return true
+end
+
+function shell.reset_input()
+    input_buffer = ""
+    input_complete = false
+end
+
+function shell.is_input_complete()
+    return input_complete
+end
+
+function shell.get_input_buffer()
+    return input_buffer
 end
 
 return shell
