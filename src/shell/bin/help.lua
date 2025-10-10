@@ -9,11 +9,9 @@ return {
            "With a command name, shows detailed help for that command.",
     
     execute = function(shellEnv, commandName)
-        -- Get a list of all commands
         local commands = {}
         
-        -- Get bin path relative to this file
-        local currentFile = debug.getinfo(1).source:sub(2)  -- Remove the leading '@'
+        local currentFile = debug.getinfo(1).source:sub(2)
         local currentDir = fs.getDir(currentFile)
         local binPath = fs.combine(fs.getDir(currentDir), "bin")
         
@@ -22,7 +20,6 @@ return {
             return false
         end
         
-        -- List all command files
         local files = fs.list(binPath)
         for _, file in ipairs(files) do
             if file:match("%.lua$") then
@@ -38,19 +35,16 @@ return {
             end
         end
         
-        -- If no command specified, list all commands
         if not commandName then
             print("Available commands:")
             print("------------------")
             
-            -- Sort commands alphabetically
             local sortedCommands = {}
             for name, _ in pairs(commands) do
                 table.insert(sortedCommands, name)
             end
             table.sort(sortedCommands)
             
-            -- Display each command with its description
             for _, name in ipairs(sortedCommands) do
                 local cmd = commands[name]
                 local desc = ""
@@ -64,7 +58,6 @@ return {
             
             print("\nType 'help <command>' for more information about a specific command.")
         else
-            -- Show help for specific command
             local command = commands[commandName]
             
             if command and type(command) == "table" then

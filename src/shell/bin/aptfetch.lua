@@ -35,7 +35,6 @@ return {
 
         os.sleep(1.5)
 
-        -- Calculate Uptime --
 
         local uptimeRaw = math.floor(os.clock())
         local uptime = 0

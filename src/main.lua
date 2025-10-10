@@ -5,6 +5,10 @@ term.clear()
 term.setCursorPos(1, 1)
 
 local shell = require("src.shell.shell")
+local scheduler = require("src.scheduler")
+
+print("Initializing process scheduler...")
+-- Don't start the background scheduler loop since we're handling ticks manually
 
 -- Default user groups and permissions
 -- "admin" group has administrative and system-level permissions
@@ -56,7 +60,6 @@ local function loginPrompt()
     term.write("Password: ")
     local password = read("*")
     
-    -- Check if user exists and password matches
     if users[username] and users[username].password == password then
         currentUser = {
             name = username,
@@ -74,10 +77,10 @@ local function main()
     while true do
         -- Reset global user first to ensure clean state
         _G.currentUser = nil
-        
-        displayLogin() 
+
+        displayLogin()
         local success, username = loginPrompt()
-        
+
         if success then
             term.clear()
             term.setCursorPos(1, 1)
@@ -89,25 +92,57 @@ local function main()
             print("Kernel Version: " .. (_G.metadata and _G.metadata.version or "Unknown"))
             print("")
             print("===================================")
-            
-            -- Set global current user for other modules to access
+
             _G.currentUser = {
                 name = username,
                 group = users[username].group,
                 permissions = users[username].permissions,
-                password = users[username].password 
+                password = users[username].password
             }
-            
-            -- Initialize the shell with the current user
+
+            -- Initialize shell (not as a process)
             if shell.init then
                 shell.init(_G.currentUser)
             end
+            shell.start(username)
             
-            -- Start the shell
-            shell.start()
-            
-            -- When shell.start() returns, we've logged out
-            -- Reset current user and continue the loop to show login again
+            -- Register shell as a system process for tracking
+            local process = require("src.process")
+            local shell_pid = process.register_system_process("shell", username, users[username].permissions)
+            print("Shell registered with PID " .. shell_pid)
+
+            -- Main event loop that handles shell input and scheduler
+            while true do
+                -- Run scheduler tick for background processes
+                scheduler.tick()
+
+                -- Handle events
+                local event = {os.pullEvent()}
+                
+                if event[1] == "terminate" then
+                    break
+                elseif event[1] == "key" then
+                    local success, result = pcall(function() return shell.handle_key_event(event[2]) end)
+                    if success and result then
+                        -- Key event was processed, check if input is complete
+                        pcall(function() shell.process_input() end)
+                    end
+                elseif event[1] == "char" then
+                    pcall(function() shell.handle_char_event(event[2]) end)
+                end
+
+                -- Check if logout was requested
+                if _G._LOGOUT_REQUESTED then
+                    break
+                end
+                
+                -- Check if shell process has been murdered
+                local shell_proc = process.get(shell_pid)
+                if shell_proc and shell_proc.state == "murdered" then
+                    break
+                end
+            end
+
             currentUser = nil
             _G.currentUser = nil
             os.sleep(1)
@@ -119,4 +154,10 @@ local function main()
 end
 
 -- Start the main OS loop
-main()
+local function run()
+    main()
+end
+
+return {
+    run = run
+}
