@@ -13,10 +13,31 @@ local PROCESS_STATES = {
 
 local processes = {}
 local next_pid = 1
+local MAX_PROCESSES = 500
+
+local function write_debug_file(msg)
+    pcall(function()
+        if fs and fs.open then
+            local f = fs.open("/kernel_debug.txt", "a")
+            if f then f.writeLine(tostring(msg)) f.close() end
+        else
+            local ok, io = pcall(function() return io end)
+            if ok and io and io.open then
+                local f2 = io.open("/kernel_debug.txt", "a")
+                if f2 then f2:write(tostring(msg) .. "\n") f2:close() end
+            end
+        end
+    end)
+end
 
 local current_process = nil
 
 function process.create(func, name, user, permissions)
+    -- Safety: prevent runaway process creation
+    if (next_pid - 1) >= MAX_PROCESSES then
+        write_debug_file("process.create: PID limit reached: " .. tostring(MAX_PROCESSES))
+        return nil, "PID limit reached"
+    end
     local pid = next_pid
     next_pid = next_pid + 1
     
@@ -32,7 +53,7 @@ function process.create(func, name, user, permissions)
         created_time = os.time(),
         last_run_time = 0
     }
-    
+    write_debug_file(string.format("process.create: pid=%s name=%s user=%s", tostring(pid), tostring(name), tostring(user)))
     return pid
 end
 
@@ -99,6 +120,7 @@ end
 function process._run(pid)
     local proc = processes[pid]
     if not proc then
+        write_debug_file("process._run: process not found pid=" .. tostring(pid))
         return false
     end
     
@@ -106,6 +128,7 @@ function process._run(pid)
         current_process = proc
         proc.state = PROCESS_STATES.RUNNING
         proc.last_run_time = os.time()
+        write_debug_file("process._run: running system process pid=" .. tostring(pid))
         current_process = nil
         return true, "System process"
     end
@@ -117,20 +140,29 @@ function process._run(pid)
     current_process = proc
     proc.state = PROCESS_STATES.RUNNING
     proc.last_run_time = os.time()
-    
+    write_debug_file("process._run: resuming coroutine pid=" .. tostring(pid) .. " name=" .. tostring(proc.name))
+
     local success, result = coroutine.resume(proc.coroutine)
-    
+
+    -- Log result/exception
+    if not success then
+        write_debug_file("process._run: coroutine error pid=" .. tostring(pid) .. " err=" .. tostring(result))
+    end
+
     if coroutine.status(proc.coroutine) == "dead" then
         proc.state = PROCESS_STATES.DEAD
         proc.exit_code = success and 0 or 1
         proc.exit_message = success and "Normal exit" or tostring(result)
+        write_debug_file("process._run: process exited pid=" .. tostring(pid) .. " code=" .. tostring(proc.exit_code) .. " msg=" .. tostring(proc.exit_message))
     elseif proc.state == PROCESS_STATES.MURDERED then
         proc.state = PROCESS_STATES.DEAD
         proc.exit_code = 1
         proc.exit_message = "Murdered"
+        write_debug_file("process._run: process murdered pid=" .. tostring(pid))
         process._cleanup(proc.pid)
     else
         proc.state = PROCESS_STATES.READY
+        write_debug_file("process._run: coroutine yielded pid=" .. tostring(pid))
     end
     
     current_process = nil

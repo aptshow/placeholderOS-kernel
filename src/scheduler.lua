@@ -117,8 +117,11 @@ function scheduler.spawn(func, name, user, permissions)
 end
 
 function scheduler.tick()
+    -- In GUI mode we may prefer to drive the scheduler via tick() without
+    -- starting the full background scheduler. Ensure running is true so
+    -- tick() actually processes ready jobs.
     if not running then
-        return
+        running = true
     end
     
     refresh_ready_queue()
